@@ -8,19 +8,24 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
+#define MAX_PLANES 8
+#define MAX_LABELS 3
+
 Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// --- TAPERED / SWEPT WING DOLGUN UÇAK İKONU (9x9 Piksel) ---
-const unsigned char PROGMEM tapered_plane_bmp[] = {
-  0b00001000, 0b00000000, //     *
-  0b00001000, 0b00000000, //     *
-  0b00011100, 0b00000000, //    ***
-  0b01111111, 0b00000000, //  *******  (Kanat Kökü Kalın)
-  0b00111110, 0b00000000, //   *****   (Tapered Kanat Ucu)
-  0b00001000, 0b00000000, //     *     (Gövde)
-  0b00011100, 0b00000000, //    ***    (Kuyruk)
-  0b00001000, 0b00000000, //     *
-  0b00000000, 0b00000000
+// --- MODERN SWEPT WING PLANE ICON (11x11 Pixels) ---
+const unsigned char PROGMEM modern_plane_bmp[] = {
+  0b00000100, 0b00000000, //      *
+  0b00001110, 0b00000000, //     ***
+  0b00011111, 0b00000000, //    *****
+  0b00001110, 0b00000000, //     ***
+  0b11001110, 0b01100000, // **  ***  **
+  0b11101110, 0b11100000, // *** *** ***
+  0b01111111, 0b11000000, //  *********
+  0b00001110, 0b00000000, //     ***
+  0b00001110, 0b00000000, //     ***
+  0b00111111, 0b10000000, //   *******
+  0b00000100, 0b00000000  //      *
 };
 
 struct Plane {
@@ -31,7 +36,7 @@ struct Plane {
   int spd;
 };
 
-Plane planes[2];
+Plane planes[MAX_PLANES];
 int planeCount = 0;
 String status = "INIT";
 
@@ -41,14 +46,14 @@ void setup() {
   delay(150);
 
   if (!display.begin(0x3C, true)) {
-    while (1);
+    while (1); // Halt if display init fails
   }
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
   display.setCursor(10, 25);
-  display.println("FAST RADAR V2..");
+  display.println("FAST RADAR V2.1");
   display.display();
 }
 
@@ -63,7 +68,8 @@ void loop() {
     if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
       String jsonClean = input.substring(startIdx, endIdx + 1);
 
-      StaticJsonDocument<512> doc;
+      // Increased size to handle up to 8 planes
+      StaticJsonDocument<1024> doc;
       DeserializationError error = deserializeJson(doc, jsonClean);
 
       if (!error) {
@@ -72,7 +78,7 @@ void loop() {
 
         planeCount = 0;
         for (JsonObject obj : arr) {
-          if (planeCount < 2) {
+          if (planeCount < MAX_PLANES) {
             planes[planeCount].cs  = obj["cs"].as<String>();
             planes[planeCount].x   = obj["x"].as<int>();
             planes[planeCount].y   = obj["y"].as<int>();
@@ -87,82 +93,77 @@ void loop() {
   }
 }
 
-// PARSELLENMİŞ KARE IZGARA VE PARSEL METİNLERİ
-void drawParsedGrid() {
-  // 10 KM Dış Kare Sınırı
+// Draw the proportional radar grid (128x64 = 10km x 5km)
+void drawRadarGrid() {
+  // 1. Dış Çerçeve
   display.drawRect(0, 0, 128, 64, SH110X_WHITE);
 
-  // 6 KM İç Parsel Çizgisi (Noktalı)
-  for (int x = 20; x < 108; x += 4) {
-    display.drawPixel(x, 10, SH110X_WHITE);
-    display.drawPixel(x, 54, SH110X_WHITE);
-  }
-  for (int y = 10; y < 54; y += 4) {
-    display.drawPixel(20, y, SH110X_WHITE);
-    display.drawPixel(108, y, SH110X_WHITE);
-  }
+  // 2. Merkez Haç (Crosshair) Noktalı Çizgiler
+  for (int y = 0; y < 64; y += 4) display.drawPixel(64, y, SH110X_WHITE);
+  for (int x = 0; x < 128; x += 4) display.drawPixel(x, 32, SH110X_WHITE);
 
-  // 3 KM En İç Parsel Çizgisi (Noktalı)
-  for (int x = 42; x < 86; x += 4) {
-    display.drawPixel(x, 21, SH110X_WHITE);
-    display.drawPixel(x, 43, SH110X_WHITE);
-  }
-  for (int y = 21; y < 43; y += 4) {
-    display.drawPixel(42, y, SH110X_WHITE);
-    display.drawPixel(86, y, SH110X_WHITE);
-  }
+  // 3. Mesafe Halkaları (1 KM = 12.8 Piksel)
+  // 2 KM Yarıçap = 25.6 Piksel -> ~26
+  display.drawCircle(64, 32, 26, SH110X_WHITE);
+  
+  // 4 KM Yarıçap = 51.2 Piksel -> ~51 (Alt/Üst kısımları ekrandan taşar, radar efekti verir)
+  display.drawCircle(64, 32, 51, SH110X_WHITE);
 
-  // Merkez Konumun (Senin Yerin)
+  // 4. Merkez Nokta (Senin Konumun)
   display.fillRect(63, 31, 3, 3, SH110X_WHITE);
 
-  // Parsel Etiketleri (Köşe/Kenar Yazıları)
+  // 5. Etiketler
   display.setTextSize(1);
-  display.setCursor(2, 2);
-  display.print("10K");
+  
+  // 2K Etiketi (İç halkanın üstünde)
+  display.setCursor(67, 7);
+  display.print("2K");
+  
+  // 4K Etiketi (Dış halkanın sağında)
+  display.setCursor(110, 35);
+  display.print("4K");
+}
 
-  display.setCursor(22, 12);
-  display.print("6K");
+// Draw plane icon and optional information box
+void drawPlane(int index, Plane p) {
+  // Draw Modern Plane Icon (11x11 Pixels, offset by 5 to center it)
+  display.drawBitmap(p.x - 5, p.y - 5, modern_plane_bmp, 11, 11, SH110X_WHITE);
 
-  display.setCursor(44, 23);
-  display.print("3K");
+  // Only draw detailed label box for the closest MAX_LABELS planes
+  if (index < MAX_LABELS) {
+    // Determine box position to prevent going off-screen
+    int boxX = (p.x > 64) ? (p.x - 58) : (p.x + 8);
+    int boxY = (p.y > 32) ? (p.y - 18) : (p.y + 4);
+
+    // Draw connector line
+    display.drawLine(p.x, p.y, (p.x > 64) ? boxX + 58 : boxX, boxY + 8, SH110X_WHITE);
+
+    // Box Background & Border
+    display.fillRect(boxX, boxY, 58, 17, SH110X_BLACK);
+    display.drawRect(boxX, boxY, 58, 17, SH110X_WHITE);
+
+    // Texts: Callsign / Altitude/Speed
+    display.setTextSize(1);
+    display.setCursor(boxX + 2, boxY + 2);
+    display.print(p.cs);
+
+    display.setCursor(boxX + 2, boxY + 9);
+    display.print(p.alt);
+    display.print("/");
+    display.print(p.spd);
+  }
 }
 
 void renderScreen() {
   display.clearDisplay();
   display.setTextColor(SH110X_WHITE);
 
-  // 1. Parsellenmiş Kare Izgarayı Çiz
-  drawParsedGrid();
+  drawRadarGrid();
 
-  // 2. Canlı Uçaklar ve Yapışık Bilgi Kutusu
   if (status == "OK" && planeCount > 0) {
-    for (int i = 0; i < planeCount; i++) {
-      int px = planes[i].x;
-      int py = planes[i].y;
-
-      // Tapered Uçak İkonunu Çiz (9x9 Piksel)
-      display.drawBitmap(px - 4, py - 4, tapered_plane_bmp, 9, 9, SH110X_WHITE);
-
-      // Yapışık Kutucuk Konumu
-      int boxX = (px > 64) ? (px - 58) : (px + 8);
-      int boxY = (py > 32) ? (py - 18) : (py + 4);
-
-      // Kutucuk Çizgisi
-      display.drawLine(px, py, (px > 64) ? boxX + 58 : boxX, boxY + 8, SH110X_WHITE);
-
-      // Kutucuk Siyah Arka Plan & Çerçeve
-      display.fillRect(boxX, boxY, 58, 17, SH110X_BLACK);
-      display.drawRect(boxX, boxY, 58, 17, SH110X_WHITE);
-
-      // Metinler: TK136 / 10054/450
-      display.setTextSize(1);
-      display.setCursor(boxX + 2, boxY + 2);
-      display.print(planes[i].cs.substring(0, 7));
-
-      display.setCursor(boxX + 2, boxY + 9);
-      display.print(planes[i].alt);
-      display.print("/");
-      display.print(planes[i].spd);
+    // Draw planes in reverse order so the closest (index 0) are drawn last and on top
+    for (int i = planeCount - 1; i >= 0; i--) {
+      drawPlane(i, planes[i]);
     }
   } else if (status == "NO_PLANES") {
     display.setTextSize(1);
