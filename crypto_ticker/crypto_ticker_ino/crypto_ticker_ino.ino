@@ -8,44 +8,30 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-#define MAX_COINS 4
+#define MAX_STOCKS 6
 
 Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-struct Coin {
+struct Stock {
   String symbol;
   String price;
-  float change;
+  float daily_change;
+  float six_mo_change;
 };
 
-Coin coins[MAX_COINS];
-int coinCount = 0;
+Stock stocks[MAX_STOCKS];
+int stockCount = 0;
 String status = "INIT";
 
-// For scrolling/paging logic
-int currentCoinIndex = 0;
-unsigned long lastPageChange = 0;
-const unsigned long PAGE_DURATION = 3000; // Show each coin for 3 seconds
+// Portfoy Verileri
+float port_val = 0.0;
+float port_pl = 0.0;
+float port_pl_pct = 0.0;
 
-// --- BITCOIN LOGO BITMAP (16x16) ---
-const unsigned char PROGMEM btc_logo[] = {
-  0b00000111, 0b11100000,
-  0b00011000, 0b00011000,
-  0b00100010, 0b10000100,
-  0b01000010, 0b10000010,
-  0b01000111, 0b11000010,
-  0b10000010, 0b10100001,
-  0b10000010, 0b10010001,
-  0b10000011, 0b11100001,
-  0b10000010, 0b00010001,
-  0b10000010, 0b00010001,
-  0b01000010, 0b00100010,
-  0b01000111, 0b11000010,
-  0b00100010, 0b10000100,
-  0b00011000, 0b00011000,
-  0b00000111, 0b11100000,
-  0b00000000, 0b00000000
-};
+// Paging logic
+int currentPage = 0; // 0 = List, 1 = Portfolio
+unsigned long lastPageChange = 0;
+const unsigned long PAGE_DURATION = 10000; // 10 saniyede bir ekran degisir
 
 void setup() {
   Serial.begin(115200);
@@ -60,9 +46,9 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
   display.setCursor(15, 25);
-  display.println("CRYPTO TICKER");
+  display.println("BIST PORTFOY");
   display.setCursor(15, 40);
-  display.println("Waiting for data...");
+  display.println("Veri bekleniyor...");
   display.display();
 }
 
@@ -78,88 +64,131 @@ void loop() {
     if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
       String jsonClean = input.substring(startIdx, endIdx + 1);
 
-      StaticJsonDocument<512> doc;
+      StaticJsonDocument<1024> doc;
       DeserializationError error = deserializeJson(doc, jsonClean);
 
       if (!error) {
         status = doc["st"].as<String>();
         JsonArray arr = doc["d"].as<JsonArray>();
 
-        coinCount = 0;
+        stockCount = 0;
         for (JsonObject obj : arr) {
-          if (coinCount < MAX_COINS) {
-            coins[coinCount].symbol = obj["s"].as<String>();
-            coins[coinCount].price  = obj["p"].as<String>();
-            coins[coinCount].change = obj["c"].as<float>();
-            coinCount++;
+          if (stockCount < MAX_STOCKS) {
+            stocks[stockCount].symbol = obj["s"].as<String>();
+            stocks[stockCount].price  = obj["p"].as<String>();
+            stocks[stockCount].daily_change = obj["d"].as<float>();
+            stocks[stockCount].six_mo_change = obj["m"].as<float>();
+            stockCount++;
           }
+        }
+        
+        // Portfoy verilerini cek
+        port_val = doc["port"]["v"].as<float>();
+        port_pl = doc["port"]["p"].as<float>();
+        port_pl_pct = doc["port"]["c"].as<float>();
+        
+        // Yeni veri gelince guncel sayfayi hemen ciz
+        if (status == "OK" && stockCount > 0) {
+          renderCurrentPage();
         }
       }
     }
   }
 
-  // 2. Handle Paging and Rendering
-  if (status == "OK" && coinCount > 0) {
+  // 2. Handle Paging (Sayfa Degisimi)
+  if (status == "OK" && stockCount > 0) {
     if (millis() - lastPageChange > PAGE_DURATION) {
-      currentCoinIndex = (currentCoinIndex + 1) % coinCount;
+      currentPage = (currentPage + 1) % 2; // 0 ve 1 arasinda gidip gelir
       lastPageChange = millis();
+      renderCurrentPage();
     }
-    renderCoin(currentCoinIndex);
   }
 }
 
-void renderCoin(int index) {
+void renderCurrentPage() {
+  if (currentPage == 0) {
+    renderList();
+  } else {
+    renderPortfolio();
+  }
+}
+
+void renderList() {
   display.clearDisplay();
-  
-  Coin c = coins[index];
-
-  // Draw Header Line
-  display.drawLine(0, 18, 128, 18, SH110X_WHITE);
-
-  // Symbol Name (Large)
-  display.setTextSize(2);
-  display.setCursor(22, 2);
-  display.print(c.symbol);
-
-  // Optional: Draw BTC logo if it's BTC
-  if (c.symbol == "BTC") {
-    display.drawBitmap(2, 2, btc_logo, 16, 16, SH110X_WHITE);
-  }
-
-  // Price (Very Large)
-  display.setTextSize(2);
-  // Center price somewhat manually
-  int px = (128 - (c.price.length() * 12)) / 2;
-  if (px < 0) px = 0;
-  display.setCursor(px, 26);
-  display.print("$");
-  display.print(c.price);
-
-  // 24H Change (Bottom)
   display.setTextSize(1);
-  display.setCursor(0, 50);
-  display.print("24H: ");
   
-  if (c.change > 0) {
-    display.print("+");
-    // Draw an UP arrow
-    display.fillTriangle(90, 56, 95, 51, 100, 56, SH110X_WHITE);
-  } else if (c.change < 0) {
-    // Draw a DOWN arrow
-    display.fillTriangle(90, 51, 95, 56, 100, 51, SH110X_WHITE);
-  }
-  
-  display.print(c.change);
-  display.print("%");
+  // Tablo Başlığı
+  display.setCursor(0, 0);
+  display.print("HISSE");
+  display.setCursor(50, 0);
+  display.print("1G(%)");
+  display.setCursor(95, 0);
+  display.print("6A(%)");
 
-  // Page Indicators (Dots at bottom right)
-  for (int i = 0; i < coinCount; i++) {
-    if (i == index) {
-      display.fillCircle(110 + (i * 6), 54, 2, SH110X_WHITE);
-    } else {
-      display.drawCircle(110 + (i * 6), 54, 2, SH110X_WHITE);
-    }
+  display.drawLine(0, 8, 128, 8, SH110X_WHITE);
+
+  // Satır Satır Hisseler
+  for (int i = 0; i < stockCount; i++) {
+    int yPos = 10 + (i * 9); 
+    
+    display.setCursor(0, yPos);
+    String sym = stocks[i].symbol;
+    if(sym.length() > 5) sym = sym.substring(0,5);
+    display.print(sym);
+
+    display.setCursor(50, yPos);
+    if (stocks[i].daily_change > 0) display.print("+");
+    display.print(stocks[i].daily_change, 1);
+
+    display.setCursor(95, yPos);
+    if (stocks[i].six_mo_change > 0) display.print("+");
+    display.print(stocks[i].six_mo_change, 1);
   }
+
+  // Sayfa gostergesi (1. nokta dolu)
+  display.fillCircle(118, 62, 1, SH110X_WHITE);
+  display.drawCircle(124, 62, 1, SH110X_WHITE);
+
+  display.display();
+}
+
+void renderPortfolio() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  
+  // Baslik
+  display.setCursor(25, 0);
+  display.print("PORTFOY OZETI");
+  display.drawLine(0, 9, 128, 9, SH110X_WHITE);
+  
+  // Bakiye (Guncel Deger)
+  display.setCursor(0, 14);
+  display.print("Guncel Deger:");
+  
+  display.setTextSize(2);
+  display.setCursor(0, 26);
+  display.print(port_val, 0); // Kusurat gosterme
+  
+  display.setTextSize(1);
+  // Fiyatin sonuna TL yazdir (Y kordinatini ortalayarak)
+  display.setCursor(display.getCursorX() + 2, 33);
+  display.print("TL");
+  
+  // Kar Zarar
+  display.setCursor(0, 46);
+  display.print("Kar/Zarar: ");
+  
+  display.setCursor(0, 56);
+  if (port_pl > 0) display.print("+");
+  display.print(port_pl, 0);
+  display.print(" TL (");
+  if (port_pl_pct > 0) display.print("+");
+  display.print(port_pl_pct, 1);
+  display.print("%)");
+
+  // Sayfa gostergesi (2. nokta dolu)
+  display.drawCircle(118, 62, 1, SH110X_WHITE);
+  display.fillCircle(124, 62, 1, SH110X_WHITE);
 
   display.display();
 }
