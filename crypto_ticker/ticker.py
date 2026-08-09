@@ -23,12 +23,9 @@ UPDATE_INTERVAL = 30 # Seconds
 # "lot" : Elinizdeki hisse adedi
 # "cost": Hissenin size olan ortalama alis maliyeti
 PORTFOLIO = [
-    {"id": "THYAO", "sym": "THYAO.IS", "lot": 100, "cost": 285.50},
-    {"id": "EFORC", "sym": "EFORC.IS", "lot": 500, "cost": 18.20},
-    {"id": "ASELS", "sym": "ASELS.IS", "lot": 250, "cost": 55.00},
-    {"id": "ASTOR", "sym": "ASTOR.IS", "lot": 150, "cost": 92.40},
-    {"id": "DOFRB", "sym": "DOFRB.IS", "lot": 300, "cost": 50.10},
-    {"id": "PGSUS", "sym": "PGSUS.IS", "lot": 50,  "cost": 850.00}
+    {"id": "THYAO", "sym": "THYAO.IS", "lot": 100, "cost": 315.38},
+    {"id": "EFOR", "sym": "EFOR.IS", "lot": 500, "cost": 19.19},
+    {"id": "ASELS", "sym": "ASELS.IS", "lot": 15, "cost": 404.56}
 ]
 
 def fetch_stock_data():
