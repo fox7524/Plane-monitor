@@ -93,35 +93,35 @@ void loop() {
   }
 }
 
-// Draw the proportional radar grid (128x64 = 10km x 5km)
+// Draw the proportional radar grid (128x64 = 15km x 7.5km area mapped)
 void drawRadarGrid() {
   // 1. Dış Çerçeve
   display.drawRect(0, 0, 128, 64, SH110X_WHITE);
 
-  // 2. Merkez Haç (Crosshair) Noktalı Çizgiler
-  for (int y = 0; y < 64; y += 4) display.drawPixel(64, y, SH110X_WHITE);
-  for (int x = 0; x < 128; x += 4) display.drawPixel(x, 32, SH110X_WHITE);
-
-  // 3. Mesafe Halkaları (1 KM = 12.8 Piksel)
-  // 2 KM Yarıçap = 25.6 Piksel -> ~26
-  display.drawCircle(64, 32, 26, SH110X_WHITE);
+  // 2. Noktalı Grid (Izgara) Çizgileri
+  // X Ekseninde dikey çizgiler
+  for (int x = 16; x < 128; x += 16) {
+    for (int y = 0; y < 64; y += 4) {
+      display.drawPixel(x, y, SH110X_WHITE);
+    }
+  }
   
-  // 4 KM Yarıçap = 51.2 Piksel -> ~51 (Alt/Üst kısımları ekrandan taşar, radar efekti verir)
-  display.drawCircle(64, 32, 51, SH110X_WHITE);
+  // Y Ekseninde yatay çizgiler
+  for (int y = 16; y < 64; y += 16) {
+    for (int x = 0; x < 128; x += 4) {
+      display.drawPixel(x, y, SH110X_WHITE);
+    }
+  }
 
-  // 4. Merkez Nokta (Senin Konumun)
-  display.fillRect(63, 31, 3, 3, SH110X_WHITE);
+  // 3. Merkez Nokta (Senin Konumun) - Yöne bakan minik üçgen (Yukarı/İleri bakıyor)
+  // Ekranın üstü bizim baktığımız yön olduğu için üçgen yukarıyı gösterir.
+  display.drawTriangle(64, 29, 61, 34, 67, 34, SH110X_WHITE);
+  display.fillTriangle(64, 29, 61, 34, 67, 34, SH110X_WHITE);
 
-  // 5. Etiketler
+  // 4. Grid Etiketleri
   display.setTextSize(1);
-  
-  // 2K Etiketi (İç halkanın üstünde)
-  display.setCursor(67, 7);
-  display.print("2K");
-  
-  // 4K Etiketi (Dış halkanın sağında)
-  display.setCursor(110, 35);
-  display.print("4K");
+  display.setCursor(2, 2);
+  display.print("15K");
 }
 
 // Draw plane icon and optional information box

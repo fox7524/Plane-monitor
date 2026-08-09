@@ -4,6 +4,15 @@ import serial
 import math
 import urllib.request
 import urllib.error
+import ssl
+
+# Mac OS X Python SSL Fix: Create a default unverified context
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
 
 # --- CONFIGURATION ---
 SERIAL_PORT = '/dev/cu.usbmodem1101'
@@ -15,10 +24,10 @@ MY_LON = 28.9784
 MY_HEADING = 0    # Bilgisayarınızın Baktığı Yön (0=Kuzey, 90=Doğu, 180=Güney, 270=Batı)
 
 # Radar Area Settings
-# 128 pixels = 10 KM width -> 12.8 pixels per KM
-# 64 pixels = 5 KM height
-PIXELS_PER_KM = 12.8
-FETCH_RADIUS_KM = 6.0  # 10x5 km rectangle max corner distance is ~5.6km
+# 128 pixels = 15 KM width -> 8.53 pixels per KM
+# 64 pixels = 7.5 KM height
+PIXELS_PER_KM = 8.533
+FETCH_RADIUS_KM = 15.0  # Search radius increased to 15km
 
 MAX_PLANES = 8    # Maximum number of planes to send to Arduino
 
@@ -69,10 +78,12 @@ def fetch_fr24_direct():
         headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
     )
 
+    planes = []
+    
+    # --- FLIGHTRADAR24 FETCH ---
     try:
         with urllib.request.urlopen(req, timeout=3) as response:
             data = json.loads(response.read().decode('utf-8'))
-            planes = []
 
             for key, val in data.items():
                 if key in ["full_count", "version"] or not isinstance(val, list) or len(val) <= 13:
@@ -91,7 +102,7 @@ def fetch_fr24_direct():
 
                 x_pixel, y_pixel = calculate_pixel_coordinates(lat, lon)
 
-                # Filter out planes strictly outside our 10x5 km screen (with small buffer for icons)
+                # Filter out planes strictly outside our 15x7.5 km screen (with small buffer for icons)
                 if not (-10 <= x_pixel <= SCREEN_W + 10 and -10 <= y_pixel <= SCREEN_H + 10):
                     continue
 
@@ -101,21 +112,71 @@ def fetch_fr24_direct():
                     "y": y_pixel,
                     "alt": alt_ft,
                     "spd": speed_kts,
-                    "dist": dist
+                    "dist": dist,
+                    "src": "FR24"
                 })
-
-            # Sort by distance to center and return top MAX_PLANES
-            planes.sort(key=lambda p: p["dist"])
-            return planes[:MAX_PLANES]
-
-    except urllib.error.URLError as e:
-        print(f"Network Error: {e}")
-    except json.JSONDecodeError as e:
-        print(f"Parse Error: {e}")
     except Exception as e:
-        print(f"Unexpected Error: {e}")
+        print(f"FR24 Fetch Error: {e}")
 
-    return []
+    # --- OPENSKY NETWORK FETCH ---
+    # OpenSky provides bounding box queries: lamin, lomin, lamax, lomax
+    opensky_url = f"https://opensky-network.org/api/states/all?lamin={MY_LAT - lat_change:.4f}&lomin={MY_LON - lon_change:.4f}&lamax={MY_LAT + lat_change:.4f}&lomax={MY_LON + lon_change:.4f}"
+    req_opensky = urllib.request.Request(
+        opensky_url, 
+        headers={'User-Agent': 'Plane-Monitor-App/1.0'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req_opensky, timeout=3) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            states = data.get("states")
+            
+            if states:
+                for state in states:
+                    # state = [icao24, callsign, origin_country, time_position, last_contact, lon, lat, baro_altitude, on_ground, velocity, ...]
+                    lon = state[5]
+                    lat = state[6]
+                    alt_m = state[7]
+                    speed_ms = state[9]
+                    callsign = str(state[1]).strip() if state[1] else "UNK"
+                    
+                    if lat is None or lon is None:
+                        continue
+                        
+                    alt_ft = int(alt_m * 3.28084) if alt_m else 0
+                    speed_kts = int(speed_ms * 1.94384) if speed_ms else 0
+                    
+                    dist = get_distance_km(MY_LAT, MY_LON, lat, lon)
+                    if dist > FETCH_RADIUS_KM:
+                        continue
+                        
+                    x_pixel, y_pixel = calculate_pixel_coordinates(lat, lon)
+                    if not (-10 <= x_pixel <= SCREEN_W + 10 and -10 <= y_pixel <= SCREEN_H + 10):
+                        continue
+                        
+                    # Check if already in FR24 planes
+                    is_duplicate = False
+                    for p in planes:
+                        if get_distance_km(lat, lon, lat, lon) < 0.5 or p["cs"] == callsign[:7]:
+                            is_duplicate = True
+                            break
+                            
+                    if not is_duplicate:
+                        planes.append({
+                            "cs": callsign[:7],
+                            "x": x_pixel,
+                            "y": y_pixel,
+                            "alt": alt_ft,
+                            "spd": speed_kts,
+                            "dist": dist,
+                            "src": "OSKY"
+                        })
+    except Exception as e:
+        print(f"OpenSky Fetch Error: {e}")
+
+    # Sort by distance to center and return top MAX_PLANES
+    planes.sort(key=lambda p: p["dist"])
+    return planes[:MAX_PLANES]
 
 def main():
     try:
