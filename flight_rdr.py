@@ -3,26 +3,58 @@ import json
 import serial
 import math
 import urllib.request
+import urllib.error
 
+# --- CONFIGURATION ---
 SERIAL_PORT = '/dev/cu.usbmodem1101'
 BAUD_RATE = 115200
 
-# Tam Konumun (İstanbul)
+# Location Settings (Istanbul)
 MY_LAT = 41.0082
 MY_LON = 28.9784
-RADIUS_KM = 10.0  # Tam 10 KM
+RADIUS_KM = 10.0  # Radar radius in KM
+MY_HEADING = 0    # 0=North, 90=East, 180=South, 270=West
 
-MY_HEADING = 0  # Bakış Yönün (0=Kuzey, 90=Doğu, 180=Güney, 270=Batı)
+MAX_PLANES = 8    # Maximum number of planes to send to Arduino
+
+# Screen Settings (OLED 128x64)
+SCREEN_W = 128
+SCREEN_H = 64
+CENTER_X = SCREEN_W // 2
+CENTER_Y = SCREEN_H // 2
 
 def get_distance_km(lat1, lon1, lat2, lon2):
+    """Calculate distance between two coordinates using Haversine formula."""
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    a = (math.sin(dlat / 2)**2 + 
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+def calculate_pixel_coordinates(lat, lon, lat_change, lon_change):
+    """Convert real-world coordinates to OLED screen pixel coordinates based on heading."""
+    lat_diff = lat - MY_LAT
+    lon_diff = lon - MY_LON
+
+    # Apply Heading Rotation
+    rad = math.radians(MY_HEADING)
+    rot_lon = lon_diff * math.cos(rad) - lat_diff * math.sin(rad)
+    rot_lat = lon_diff * math.sin(rad) + lat_diff * math.cos(rad)
+
+    # Convert to 10 KM scale pixels
+    x_pixel = int(CENTER_X + (rot_lon / lon_change) * (CENTER_X - 6))
+    y_pixel = int(CENTER_Y - (rot_lat / lat_change) * (CENTER_Y - 6))
+
+    # Keep within screen bounds
+    x_pixel = max(4, min(SCREEN_W - 4, x_pixel))
+    y_pixel = max(4, min(SCREEN_H - 4, y_pixel))
+    
+    return x_pixel, y_pixel
+
 def fetch_fr24_direct():
+    """Fetch and parse live data from Flightradar24."""
     lat_change = RADIUS_KM / 111.0
     lon_change = RADIUS_KM / (111.0 * math.cos(math.radians(MY_LAT)))
 
@@ -40,73 +72,66 @@ def fetch_fr24_direct():
             planes = []
 
             for key, val in data.items():
-                if key in ["full_count", "version"]:
+                if key in ["full_count", "version"] or not isinstance(val, list) or len(val) <= 13:
                     continue
 
-                if isinstance(val, list) and len(val) > 13:
-                    lat = val[1]
-                    lon = val[2]
-                    callsign = val[16] if val[16] else val[13]
-                    alt_ft = val[4]
-                    speed_kts = val[5]
+                lat = val[1]
+                lon = val[2]
+                alt_ft = val[4]
+                speed_kts = val[5]
+                callsign = val[16] if val[16] else val[13]
+                callsign = callsign if callsign else "UNK"
 
-                    if not callsign:
-                        callsign = "UNK"
+                dist = get_distance_km(MY_LAT, MY_LON, lat, lon)
+                if dist > RADIUS_KM:
+                    continue
 
-                    dist = get_distance_km(MY_LAT, MY_LON, lat, lon)
-                    if dist > RADIUS_KM:
-                        continue
+                x_pixel, y_pixel = calculate_pixel_coordinates(lat, lon, lat_change, lon_change)
 
-                    lat_diff = lat - MY_LAT
-                    lon_diff = lon - MY_LON
+                planes.append({
+                    "cs": callsign[:7].strip(),
+                    "x": x_pixel,
+                    "y": y_pixel,
+                    "alt": alt_ft,
+                    "spd": speed_kts,
+                    "dist": dist
+                })
 
-                    # Heading Dönüşü
-                    rad = math.radians(MY_HEADING)
-                    rot_lon = lon_diff * math.cos(rad) - lat_diff * math.sin(rad)
-                    rot_lat = lon_diff * math.sin(rad) + lat_diff * math.cos(rad)
-
-                    # 10 KM Piksel Dönüşümü
-                    x_pixel = int(64 + (rot_lon / lon_change) * 58)
-                    y_pixel = int(32 - (rot_lat / lat_change) * 26)
-
-                    x_pixel = max(4, min(124, x_pixel))
-                    y_pixel = max(4, min(60, y_pixel))
-
-                    planes.append({
-                        "cs": callsign[:7].strip(),
-                        "x": x_pixel,
-                        "y": y_pixel,
-                        "alt": alt_ft,
-                        "spd": speed_kts,
-                        "dist": dist
-                    })
-
+            # Sort by distance to center and return top MAX_PLANES
             planes.sort(key=lambda p: p["dist"])
-            return planes[:2]
+            return planes[:MAX_PLANES]
 
+    except urllib.error.URLError as e:
+        print(f"Network Error: {e}")
+    except json.JSONDecodeError as e:
+        print(f"Parse Error: {e}")
     except Exception as e:
-        print(f"Baglanti / Parse Hatasi: {e}")
+        print(f"Unexpected Error: {e}")
 
     return []
 
 def main():
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        print(f"Flightradar24 Direkt Canli Akis Aktif: {SERIAL_PORT}")
-        time.sleep(1)
-    except Exception as e:
-        print(f"Port Hatasi: {e}")
+        print(f"Connected to Arduino on {SERIAL_PORT}")
+        time.sleep(2) # Wait for Arduino to reset
+    except serial.SerialException as e:
+        print(f"Serial Port Error: {e}")
         return
 
     while True:
         planes = fetch_fr24_direct()
-        payload = {"st": "OK" if planes else "NO_PLANES", "p": planes}
-        json_str = json.dumps(payload) + "\r\n"
-
+        payload = {
+            "st": "OK" if planes else "NO_PLANES", 
+            "p": planes
+        }
+        
+        # Serialize and send
+        json_str = json.dumps(payload) + "\n"
         ser.write(json_str.encode('utf-8'))
         ser.flush()
 
-        print(f"FR24 Canli 10KM Ucaklar ({len(planes)} adet): {json_str.strip()}")
+        print(f"Sent {len(planes)} planes to Arduino: {json_str.strip()}")
         time.sleep(2)
 
 if __name__ == "__main__":
