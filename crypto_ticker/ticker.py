@@ -20,27 +20,35 @@ UPDATE_INTERVAL = 30 # Seconds
 
 # --- PORTFOY BILGILERI ---
 # Buraya Akbank'taki guncel lot sayinizi ve ortalama maliyetinizi yazin.
-# "lot" : Elinizdeki hisse adedi
-# "cost": Hissenin size olan ortalama alis maliyeti
 PORTFOLIO = [
     {"id": "THYAO", "sym": "THYAO.IS", "lot": 100, "cost": 315.38},
     {"id": "EFOR", "sym": "EFOR.IS", "lot": 500, "cost": 19.19},
     {"id": "ASELS", "sym": "ASELS.IS", "lot": 15, "cost": 404.56}
 ]
 
-def fetch_stock_data():
-    """Fetch ticker data and calculate portfolio value."""
-    results = []
-    
-    total_cost = 0.0
-    total_value = 0.0
-    
+# --- IZLEME LISTESI (TUM 6 HISSE) ---
+WATCHLIST = [
+    {"id": "THYAO", "sym": "THYAO.IS"},
+    {"id": "EFOR",  "sym": "EFOR.IS"},
+    {"id": "ASELS", "sym": "ASELS.IS"},
+    {"id": "ASTOR", "sym": "ASTOR.IS"},
+    {"id": "DOFRB", "sym": "DOFRB.IS"},
+    {"id": "PGSUS", "sym": "PGSUS.IS"}
+]
+
+def fetch_all_data():
+    """Fetch ticker data for all unique symbols in Portfolio and Watchlist."""
+    # Find unique symbols
+    symbols = {}
     for item in PORTFOLIO:
-        sym_req = item["sym"]
-        name = item["id"]
-        lot = item["lot"]
-        avg_cost = item["cost"]
+        symbols[item["sym"]] = item["id"]
+    for item in WATCHLIST:
+        symbols[item["sym"]] = item["id"]
         
+    cache = {}
+    
+    # Fetch from Yahoo Finance
+    for sym_req, name in symbols.items():
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym_req}?range=6mo&interval=1d"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
 
@@ -67,47 +75,62 @@ def fetch_stock_data():
                         six_mo_price = closes[0]
                         if six_mo_price > 0:
                             six_mo_change = ((current_price - six_mo_price) / six_mo_price) * 100
-                
-                # Portfoy Hesaplamalari
-                item_total_cost = lot * avg_cost
-                item_total_value = lot * current_price
-                
-                total_cost += item_total_cost
-                total_value += item_total_value
-                
-                price_str = f"{current_price:,.2f}"
-                
-                results.append({
-                    "s": name,
-                    "p": price_str,
-                    "d": round(daily_change, 1),
-                    "m": round(six_mo_change, 1)
-                })
+                            
+                cache[sym_req] = {
+                    "p": current_price,
+                    "d": daily_change,
+                    "m": six_mo_change
+                }
                 
         except Exception as e:
             print(f"Error fetching {name}: {e}")
-            results.append({
-                "s": name,
-                "p": "ERR",
-                "d": 0.0,
-                "m": 0.0
+            
+        time.sleep(0.5) # API limits
+        
+    # --- 1. PORTFOY HESAPLAMASI ---
+    port_data = []
+    total_cost = 0.0
+    total_value = 0.0
+    
+    for item in PORTFOLIO:
+        c = cache.get(item["sym"])
+        if c:
+            val = c["p"] * item["lot"]
+            cost = item["cost"] * item["lot"]
+            total_value += val
+            total_cost += cost
+            
+            port_data.append({
+                "s": item["id"],
+                "p": f"{c['p']:,.2f}",
+                "d": round(c["d"], 1),
+                "m": round(c["m"], 1)
             })
             
-        time.sleep(0.5)
-        
-    # Genel Portfoy Kar/Zarar Hesaplamasi
-    total_pl = total_value - total_cost
-    total_pl_pct = 0.0
+    port_pl = total_value - total_cost
+    port_pl_pct = 0.0
     if total_cost > 0:
-        total_pl_pct = (total_pl / total_cost) * 100
+        port_pl_pct = (port_pl / total_cost) * 100
         
     port_summary = {
         "v": round(total_value, 2),
-        "p": round(total_pl, 2),
-        "c": round(total_pl_pct, 2)
+        "p": round(port_pl, 2),
+        "c": round(port_pl_pct, 2)
     }
-        
-    return results, port_summary
+    
+    # --- 2. IZLEME LISTESI HESAPLAMASI ---
+    watch_data = []
+    for item in WATCHLIST:
+        c = cache.get(item["sym"])
+        if c:
+            watch_data.append({
+                "s": item["id"],
+                "p": f"{c['p']:,.2f}",
+                "d": round(c["d"], 1),
+                "m": round(c["m"], 1)
+            })
+            
+    return port_data, port_summary, watch_data
 
 def main():
     try:
@@ -118,23 +141,34 @@ def main():
         print(f"Serial Port Error: {e}")
         return
 
-    print("Starting BIST Portfolio Ticker...")
+    print("Starting Dual-Page BIST Ticker...")
     
     while True:
-        stock_data, port_summary = fetch_stock_data()
+        port_data, port_summary, watch_data = fetch_all_data()
         
-        if stock_data:
-            payload = {"st": "OK", "d": stock_data, "port": port_summary}
-            json_str = json.dumps(payload) + "\n"
-            
-            ser.write(json_str.encode('utf-8'))
+        if watch_data:
+            # GONDERIM 1: PORTFOY SAYFASI (Page 1)
+            payload1 = {"st": "OK", "page": 1, "d": port_data, "port": port_summary}
+            ser.write((json.dumps(payload1) + "\n").encode('utf-8'))
             ser.flush()
+            print(f"Sent Page 1 (Portfoy). Toplam: {port_summary['v']} TL")
             
-            print(f"Sent data. Toplam Portfoy: {port_summary['v']} TL | Kar/Zarar: {port_summary['p']} TL")
+            # Ekranda 10 saniye portfoy sayfasini tut
+            time.sleep(10)
+            
+            # GONDERIM 2: WATCHLIST SAYFASI (Page 2)
+            payload2 = {"st": "OK", "page": 2, "d": watch_data}
+            ser.write((json.dumps(payload2) + "\n").encode('utf-8'))
+            ser.flush()
+            print(f"Sent Page 2 (Watchlist). 6 Hisse guncellendi.")
+            
+            # Ekranda 10 saniye watchlist sayfasini tut
+            time.sleep(10)
         else:
             print("Failed to fetch data, retrying...")
+            time.sleep(UPDATE_INTERVAL)
             
-        time.sleep(UPDATE_INTERVAL)
+        # Toplamda 20 saniye gecti. Tekrar veri cekip donguye baslayacak.
 
 if __name__ == "__main__":
     main()

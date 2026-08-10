@@ -22,6 +22,7 @@ struct Stock {
 Stock stocks[MAX_STOCKS];
 int stockCount = 0;
 String status = "INIT";
+int currentPage = 1;
 
 // Portfoy Verileri
 float port_val = 0.0;
@@ -63,6 +64,12 @@ void loop() {
 
       if (!error) {
         status = doc["st"].as<String>();
+        if (doc.containsKey("page")) {
+          currentPage = doc["page"].as<int>();
+        } else {
+          currentPage = 1;
+        }
+        
         JsonArray arr = doc["d"].as<JsonArray>();
 
         stockCount = 0;
@@ -76,19 +83,25 @@ void loop() {
           }
         }
         
-        port_val = doc["port"]["v"].as<float>();
-        port_pl = doc["port"]["p"].as<float>();
-        port_pl_pct = doc["port"]["c"].as<float>();
+        if (currentPage == 1) {
+          port_val = doc["port"]["v"].as<float>();
+          port_pl = doc["port"]["p"].as<float>();
+          port_pl_pct = doc["port"]["c"].as<float>();
+        }
         
         if (status == "OK" && stockCount > 0) {
-          renderAll();
+          if (currentPage == 1) {
+            renderPortfolio();
+          } else {
+            renderWatchlist();
+          }
         }
       }
     }
   }
 }
 
-void renderAll() {
+void renderPortfolio() {
   display.clearDisplay();
   display.setTextSize(1);
   
@@ -110,28 +123,65 @@ void renderAll() {
   // Ayirici Cizgi
   display.drawLine(0, 16, 128, 16, SH110X_WHITE);
 
-  // 2. ALT KISIM: HISSE LISTESI (Y=17'den basliyor, 6 hisse tam 64 piksele sigar)
+  // 2. ALT KISIM: HISSE LISTESI (Y=17'den basliyor)
   for (int i = 0; i < stockCount; i++) {
-    int yPos = 17 + (i * 8); // Her hisse 8 piksel yukseklik kaplar
+    int yPos = 17 + (i * 8); 
 
-    // Hisse Kodu (X=0)
     display.setCursor(0, yPos);
     String sym = stocks[i].symbol;
     if(sym.length() > 5) sym = sym.substring(0,5);
     display.print(sym);
 
-    // Gunluk Degisim (X=45)
     display.setCursor(45, yPos);
     if (stocks[i].daily_change > 0) display.print("+");
     display.print(stocks[i].daily_change, 1);
     display.print("%");
 
-    // 6 Aylik Degisim (X=88)
     display.setCursor(88, yPos);
     if (stocks[i].six_mo_change > 0) display.print("+");
     display.print(stocks[i].six_mo_change, 1);
     display.print("%");
   }
+
+  // Page Indicator
+  display.drawPixel(120, 60, SH110X_WHITE);
+  display.drawPixel(124, 60, SH110X_BLACK);
+
+  display.display();
+}
+
+void renderWatchlist() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  
+  // Baslik
+  display.setCursor(0, 0);
+  display.print(" GENEL PIYASA (6 H) ");
+  display.drawLine(0, 9, 128, 9, SH110X_WHITE);
+
+  // Hisse Listesi (Y=12'den basliyor, rahatca 6 tane sigar)
+  for (int i = 0; i < stockCount; i++) {
+    int yPos = 12 + (i * 8); 
+
+    display.setCursor(0, yPos);
+    String sym = stocks[i].symbol;
+    if(sym.length() > 5) sym = sym.substring(0,5);
+    display.print(sym);
+
+    display.setCursor(45, yPos);
+    if (stocks[i].daily_change > 0) display.print("+");
+    display.print(stocks[i].daily_change, 1);
+    display.print("%");
+
+    display.setCursor(88, yPos);
+    if (stocks[i].six_mo_change > 0) display.print("+");
+    display.print(stocks[i].six_mo_change, 1);
+    display.print("%");
+  }
+
+  // Page Indicator
+  display.drawPixel(120, 60, SH110X_BLACK);
+  display.drawPixel(124, 60, SH110X_WHITE);
 
   display.display();
 }
